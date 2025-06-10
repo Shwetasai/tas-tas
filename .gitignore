@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.pytest_cache/
+__init__.py
+# Virtual environment
+venv/
+env/
+.env
+
+# Databases
+*.sqlite3
+*.db
+*.db-*
+
+# Uploaded Media
+media/
+
+# Static files (if collected)
+static/
+sample_data/
+
+# Logs
+*.log
+*.err
+*.out
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*~
+.DS_Store
+
+# Operating System files
+.directory
+
+# Python specific
+# Django stuff
+# coverage
+.coverage
+.coverage.*
+
+# Any other sensitive files
+*.key
+*.pem
+*.cert
+*.conf
+*.ini
+
