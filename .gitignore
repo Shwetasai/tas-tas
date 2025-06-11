@@ -53,3 +53,6 @@ sample_data/
 *.conf
 *.ini
 
+# Excel files (data and templates)
+*.xlsx
+
