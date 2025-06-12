@@ -5,7 +5,11 @@ __pycache__/
 *.pyo
 *.egg-info/
 .pytest_cache/
-__init__.py
+
+# Django migrations (ignore all except __init__.py)
+**/migrations/*
+!**/migrations/__init__.py
+
 # Virtual environment
 venv/
 env/
@@ -21,7 +25,15 @@ media/
 
 # Static files (if collected)
 static/
+
+# Data sources and sample data
 sample_data/
+data_sources/
+media/data_sources/
+
+# CSV and Excel files (be careful: this ignores ALL .csv/.xlsx files)
+*.csv
+*.xlsx
 
 # Logs
 *.log
@@ -37,22 +49,16 @@ sample_data/
 *~
 .DS_Store
 
-# Operating System files
+# OS files
 .directory
 
-# Python specific
-# Django stuff
-# coverage
+# Coverage
 .coverage
 .coverage.*
 
-# Any other sensitive files
+# Sensitive files
 *.key
 *.pem
 *.cert
 *.conf
 *.ini
-
-# Excel files (data and templates)
-*.xlsx
-

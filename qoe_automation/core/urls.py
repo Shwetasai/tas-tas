@@ -9,6 +9,7 @@ router.register(r'payroll-records', views.PayrollRecordViewSet)
 router.register(r'adjustments', views.AdjustmentViewSet)
 router.register(r'recast-pl', views.RecastPLViewSet)
 router.register(r'supplemental-notes', views.SupplementalNoteViewSet)
+router.register(r'stoc-accounting-data', views.StocAccountingDataViewSet, basename='stoc-accounting-data')
 
 urlpatterns = [
     path('', include(router.urls)),

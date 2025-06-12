@@ -3,8 +3,10 @@ import pdfplumber
 from datetime import datetime
 from decimal import Decimal
 import re
-import io 
-from .models import QuickbookRecord, PayrollRecord, Adjustment
+import io
+import os
+import openpyxl
+from .models import QuickbookRecord, PayrollRecord, Adjustment, StocAccountingData
 
 def process_quickbooks_file(file_path):
 
@@ -341,3 +343,108 @@ def extract_date_from_payment_columns(row):
     if not record_date:
         print(f"DEBUG_DATE: No valid date found for employee '{row.get('Employee Name', 'N/A')}'. Skipping record.")
     return record_date 
+
+def process_stoc_file(file_path, uploaded_by_user):
+    try:
+        file_extension = os.path.splitext(file_path)[1].lower()
+
+        if file_extension == '.csv':
+            df = pd.read_csv(file_path, 
+                           header=None,
+                           encoding='latin-1',
+                           skip_blank_lines=False,
+                           on_bad_lines='warn')
+            
+            if df.shape[1] < 4:
+                for i in range(df.shape[1], 4):
+                    df[i] = None
+
+            def get_cell_value_pandas(dataframe, row_idx, col_idx):
+                try:
+                    if row_idx < dataframe.shape[0] and col_idx < dataframe.shape[1]:
+                        return dataframe.iloc[row_idx, col_idx]
+                    return None
+                except Exception as e:
+                    return None
+
+            def find_row_index(dataframe, search_text):
+                for idx, row in dataframe.iterrows():
+                    if any(str(cell).strip() == search_text for cell in row if pd.notna(cell)):
+                        return idx
+                return None
+
+            project_name_row = find_row_index(df, "Project Name")
+            if project_name_row is None:
+                project_name_row = 13
+            project_name = get_cell_value_pandas(df, project_name_row, 1)
+            location_city = get_cell_value_pandas(df, project_name_row + 1, 1)
+            location_state = get_cell_value_pandas(df, project_name_row + 2, 1)
+
+            financial_section_row = find_row_index(df, "Financial / reporting period:")
+            if financial_section_row is None:
+                financial_section_row = 18
+            external_financial_statement = get_cell_value_pandas(df, financial_section_row + 1, 1)
+            calendar_year_fiscal_year = get_cell_value_pandas(df, financial_section_row + 3, 1)
+            stub_period_raw = get_cell_value_pandas(df, financial_section_row + 4, 1)
+            
+            financial_reporting_period_2_raw = get_cell_value_pandas(df, financial_section_row + 5, 1)
+            financial_reporting_period_1_raw = get_cell_value_pandas(df, financial_section_row + 6, 1)
+
+            status_section_row = find_row_index(df, "Tab checks:")
+            if status_section_row is None:
+                status_section_row = 25
+
+            def get_status_value(row_idx):
+                status_name = get_cell_value_pandas(df, row_idx, 1)
+                if status_name and isinstance(status_name, str):
+                    if 'Error' in status_name or 'Error!' in status_name:
+                        return 'ERROR'
+                    elif 'Ok!' in status_name:
+                        return 'OK'
+                return 'N/A'
+
+            qe_summary_status = get_status_value(status_section_row + 1)
+            recast_reported_status = get_status_value(status_section_row + 2)
+            recast_mgmt_adjusted_status = get_status_value(status_section_row + 3)
+            other_recast_status = get_status_value(status_section_row + 4)
+            lead_profit_and_loss_status = get_status_value(status_section_row + 5)
+            monthly_profit_and_loss_status = get_status_value(status_section_row + 6)
+
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}. Only .csv is supported for STOC files.")
+
+        def parse_date_safely(date_val):
+            if date_val is None or (isinstance(date_val, float) and pd.isna(date_val)):
+                return None
+            try:
+                if isinstance(date_val, str) and ',' in date_val:
+                    date_val = date_val.replace(',', ', ')
+                return pd.to_datetime(str(date_val)).date()
+            except (ValueError, TypeError):
+                return None
+
+        stub_period = parse_date_safely(stub_period_raw)
+        financial_reporting_period_1 = parse_date_safely(financial_reporting_period_1_raw)
+        financial_reporting_period_2 = parse_date_safely(financial_reporting_period_2_raw)
+
+        stoc_data = StocAccountingData.objects.create(
+            project_name=str(project_name) if project_name is not None else 'Unknown Project',
+            location_city=str(location_city) if location_city is not None else None,
+            location_state=str(location_state) if location_state is not None else None,
+            external_financial_statement=str(external_financial_statement) if external_financial_statement is not None else None,
+            calendar_year_fiscal_year=str(calendar_year_fiscal_year) if calendar_year_fiscal_year is not None else None,
+            stub_period=stub_period,
+            financial_reporting_period_1=financial_reporting_period_1,
+            financial_reporting_period_2=financial_reporting_period_2,
+            qe_summary_status=qe_summary_status,
+            recast_reported_status=recast_reported_status,
+            recast_mgmt_adjusted_status=recast_mgmt_adjusted_status,
+            other_recast_status=other_recast_status,
+            lead_profit_and_loss_status=lead_profit_and_loss_status,
+            monthly_profit_and_loss_status=monthly_profit_and_loss_status,
+            uploaded_by=uploaded_by_user
+        )
+
+        return 1
+    except Exception as e:
+        raise Exception(f"Error processing STOC file: {str(e)}") 

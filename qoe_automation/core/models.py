@@ -6,6 +6,7 @@ class DataSource(models.Model):
         ('QB', 'QuickBooks'),
         ('PAYROLL', 'Payroll System'),
         ('SUPPLEMENTAL', 'Supplemental Notes'),
+        ('STOC', 'STOC Accounting'),
     )
     
     name = models.CharField(max_length=100)
@@ -101,3 +102,37 @@ class SupplementalNote(models.Model):
     impact_amount = models.DecimalField(max_digits=15, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+class StocAccountingData(models.Model):
+    STATUS_CHOICES = (
+        ('OK', 'Ok!'),
+        ('ERROR', 'Error!'),
+        ('N/A', 'Not Applicable'),
+    )
+
+    project_name = models.CharField(max_length=255)
+    location_city = models.CharField(max_length=100, blank=True, null=True)
+    location_state = models.CharField(max_length=100, blank=True, null=True)
+
+    external_financial_statement = models.CharField(max_length=100, blank=True, null=True)
+    calendar_year_fiscal_year = models.CharField(max_length=100, blank=True, null=True)
+    stub_period = models.DateField(blank=True, null=True)
+    financial_reporting_period_1 = models.DateField(blank=True, null=True)
+    financial_reporting_period_2 = models.DateField(blank=True, null=True)
+
+    qe_summary_status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='N/A')
+    recast_reported_status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='N/A')
+    recast_mgmt_adjusted_status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='N/A')
+    other_recast_status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='N/A')
+    lead_profit_and_loss_status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='N/A')
+    monthly_profit_and_loss_status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='N/A')
+
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def __str__(self):
+        return f"STOC Data for {self.project_name} ({self.financial_reporting_period_1})"
+
+    class Meta:
+        verbose_name = "STOC Accounting Data"
+        verbose_name_plural = "STOC Accounting Data"

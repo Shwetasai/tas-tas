@@ -6,14 +6,14 @@ from django.db.models import Sum
 from django.contrib.auth import authenticate, login
 from .models import (
     DataSource, PayrollRecord,
-    Adjustment, RecastPL, SupplementalNote, QuickbookRecord
+    Adjustment, RecastPL, SupplementalNote, QuickbookRecord, StocAccountingData
 )
 from .serializers import (
     DataSourceSerializer, PayrollRecordSerializer,
-    AdjustmentSerializer, RecastPLSerializer, SupplementalNoteSerializer, QuickbookRecordSerializer
+    AdjustmentSerializer, RecastPLSerializer, SupplementalNoteSerializer, QuickbookRecordSerializer, StocAccountingDataSerializer
 )
 from rest_framework.authtoken.models import Token
-from .utils import process_payroll_file, process_quickbooks_file, suggest_adjustments, generate_recast_pl
+from .utils import process_payroll_file, process_quickbooks_file, suggest_adjustments, generate_recast_pl, process_stoc_file
 from datetime import date
 
 
@@ -120,15 +120,11 @@ class PayrollRecordViewSet(viewsets.ModelViewSet):
             return Response({"error": "Payroll data source not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            # Assuming file_path stores the path to the uploaded file relative to MEDIA_ROOT
-            # And process_payroll_file expects an absolute path or a file-like object
-            # For simplicity, we'll try to pass the path and let utils handle file opening.
-            # If the utils function expects a SimpleUploadedFile, this part might need adjustment.
+
             processed_records = process_payroll_file(data_source.file_path.path)
             
-            # Save processed records to the database
             for record in processed_records:
-                record.data_source = data_source # Link to the DataSource
+                record.data_source = data_source
                 record.save()
 
             return Response(
@@ -158,17 +154,13 @@ class AdjustmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def suggest(self, request):
-        # Retrieve all QuickBooks and Payroll records
         quickbook_records = QuickbookRecord.objects.all()
         payroll_records = PayrollRecord.objects.all()
 
-        # Generate suggestions
         suggestions = suggest_adjustments(quickbook_records, payroll_records)
 
-        # Save suggested adjustments to the database
         saved_count = 0
         for suggestion in suggestions:
-            # Make sure created_by is set to the current user
             suggestion.created_by = request.user
             suggestion.save()
             saved_count += 1
@@ -206,49 +198,39 @@ class RecastPLViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            target_date = date(int(year), int(month), 1) # Use the first day of the month
+            target_date = date(int(year), int(month), 1) 
         except ValueError:
             return Response(
                 {"error": "Invalid month or year provided"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Retrieve QuickbookRecords for the specified month/year
         quickbook_records = QuickbookRecord.objects.filter(
             date__year=year,
             date__month=month
         )
 
-        # Retrieve APPROVED Adjustments for the specified month/year
         approved_adjustments = Adjustment.objects.filter(
             status='APPROVED',
             date__year=year,
             date__month=month
         )
 
-        # Generate the recast P&L
         recast_pl_data = generate_recast_pl(quickbook_records, approved_adjustments, target_date)
         
-        # Save or update the RecastPL record
-        # You might want to get_or_create here if you only want one P&L per month
         recast_pl_instance, created = RecastPL.objects.get_or_create(
-            date=target_date, # This assumes uniqueness by date for simplicity
-            defaults=recast_pl_data # Provide all data for creation
+            date=target_date, 
+            defaults=recast_pl_data 
         )
         
         if not created:
-            # If it already exists, update the fields
             recast_pl_instance.revenue = recast_pl_data['revenue']
             recast_pl_instance.cogs = recast_pl_data['cogs']
             recast_pl_instance.gross_profit = recast_pl_data['gross_profit']
             recast_pl_instance.operating_expenses = recast_pl_data['operating_expenses']
             recast_pl_instance.ebitda = recast_pl_data['ebitda']
-            # Update ManyToMany field if needed, but not directly through defaults/update_or_create for this pattern
-            # For simplicity, we'll assume adjustments are linked on creation if new RecastPL
             recast_pl_instance.save()
             
-        # Link the adjustments to the RecastPL instance
-        # Clear existing and add new to ensure accuracy
         recast_pl_instance.adjustments.clear()
         recast_pl_instance.adjustments.set(approved_adjustments)
 
@@ -289,6 +271,36 @@ class SupplementalNoteViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         self.perform_destroy(instance)
         return Response({"message": "Supplemental note deleted successfully"}, status=status.HTTP_200_OK)
+
+class StocAccountingDataViewSet(viewsets.ModelViewSet):
+    queryset = StocAccountingData.objects.all()
+    serializer_class = StocAccountingDataSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)
+
+    @action(detail=False, methods=['post'])
+    def process_data_source(self, request):
+        data_source_id = request.data.get('data_source_id')
+        if not data_source_id:
+            return Response({"error": "data_source_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            data_source = DataSource.objects.get(id=data_source_id, source_type='STOC')
+        except DataSource.DoesNotExist:
+            return Response({"error": "STOC data source not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            from .utils import process_stoc_file
+            processed_records_count = process_stoc_file(data_source.file_path.path, self.request.user)
+
+            return Response(
+                {"message": f"Successfully processed {processed_records_count} STOC accounting records from data source {data_source_id}"},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response({"error": f"Error processing STOC file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])

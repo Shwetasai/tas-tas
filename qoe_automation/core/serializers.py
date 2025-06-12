@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     DataSource, PayrollRecord,
-    Adjustment, RecastPL, SupplementalNote, QuickbookRecord
+    Adjustment, RecastPL, SupplementalNote, QuickbookRecord, StocAccountingData
 )
 
 class DataSourceSerializer(serializers.ModelSerializer):
@@ -36,7 +36,6 @@ class RecastPLSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        # Get the actual Adjustment objects for the IDs and serialize them
         representation['adjustments'] = AdjustmentSerializer(instance.adjustments.all(), many=True).data
         return representation
 
@@ -62,4 +61,10 @@ class SupplementalNoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplementalNote
         fields = '__all__'
-        read_only_fields = ('created_at', 'updated_at') 
+        read_only_fields = ('created_at', 'updated_at')
+
+class StocAccountingDataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StocAccountingData
+        fields = '__all__'
+        read_only_fields = ('uploaded_at', 'uploaded_by') 
