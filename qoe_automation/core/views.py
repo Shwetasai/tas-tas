@@ -1,328 +1,273 @@
-from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework import status
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.db.models import Sum
+from rest_framework.decorators import api_view, permission_classes
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.contrib.auth import authenticate, login
 from .models import (
-    DataSource, PayrollRecord,
-    Adjustment, RecastPL, SupplementalNote, QuickbookRecord, StocAccountingData
+    DataSource, PayrollRecord, Adjustment, RecastPL,
+    QuickbookRecord, ProfitLossRecord,
+    PDFDocument, ExportTemplate
 )
 from .serializers import (
-    DataSourceSerializer, PayrollRecordSerializer,
-    AdjustmentSerializer, RecastPLSerializer, SupplementalNoteSerializer, QuickbookRecordSerializer, StocAccountingDataSerializer
+    DataSourceSerializer, PayrollRecordSerializer, AdjustmentSerializer,
+    RecastPLSerializer, QuickbookRecordSerializer,
+    ProfitLossRecordSerializer,
+    PDFDocumentSerializer, ExportTemplateSerializer
 )
 from rest_framework.authtoken.models import Token
-from .utils import process_payroll_file, process_quickbooks_file, suggest_adjustments, generate_recast_pl, process_stoc_file
-from datetime import date
+from .utils import (
+    process_payroll_file, process_quickbooks_file,
+    process_profit_and_loss_file, suggest_adjustments,
+    generate_recast_pl, process_stoc_file
+)
 
-
-class DataSourceViewSet(viewsets.ModelViewSet):
-    queryset = DataSource.objects.all()
-    serializer_class = DataSourceSerializer
+class DataSourceView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response({"message": "Data source deleted successfully"}, status=status.HTTP_200_OK)
-
-class QuickbookRecordViewSet(viewsets.ModelViewSet):
-    queryset = QuickbookRecord.objects.all()
-    serializer_class = QuickbookRecordSerializer
-    permission_classes = [IsAuthenticated]
-
-    @action(detail=False, methods=['post'])
-    def process_data_source(self, request):
-        data_source_id = request.data.get('data_source_id')
-        if not data_source_id:
-            return Response({"error": "data_source_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            data_source = DataSource.objects.get(id=data_source_id, source_type='QB')
-        except DataSource.DoesNotExist:
-            return Response({"error": "QuickBooks data source not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            processed_records = process_quickbooks_file(data_source.file_path.path)
-            
-            for record in processed_records:
-                record.data_source = data_source
-                record.save()
-
-            return Response(
-                {"message": f"Successfully processed {len(processed_records)} QuickBooks records from data source {data_source_id}"},
-                status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            return Response({"error": f"Error processing QuickBooks file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=False, methods=['get'])
-    def monthly_summary(self, request):
-        month = request.query_params.get('month')
-        year = request.query_params.get('year')
-        
-        if not month or not year:
-            return Response(
-                {"error": "Month and year are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        summary = self.queryset.filter(
-            date__year=year,
-            date__month=month
-        ).values('account_name').annotate(
-            total_debit=Sum('debit'),
-            total_credit=Sum('credit')
-        )
-
-        return Response(summary)
-
-class PayrollRecordViewSet(viewsets.ModelViewSet):
-    queryset = PayrollRecord.objects.all()
-    serializer_class = PayrollRecordSerializer
-    permission_classes = [IsAuthenticated]
-
-    @action(detail=False, methods=['get'])
-    def monthly_summary(self, request):
-        month = request.query_params.get('month')
-        year = request.query_params.get('year')
-        
-        if not month or not year:
-            return Response(
-                {"error": "Month and year are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        summary = self.queryset.filter(
-            date__year=year,
-            date__month=month
-        ).aggregate(
-            total_compensation=Sum('compensation'),
-            total_taxes=Sum('taxes'),
-            total_benefits=Sum('benefits')
-        )
-
-        return Response(summary)
-
-    @action(detail=False, methods=['post'])
-    def process_data_source(self, request):
-        data_source_id = request.data.get('data_source_id')
-        if not data_source_id:
-            return Response({"error": "data_source_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            data_source = DataSource.objects.get(id=data_source_id, source_type='PAYROLL')
-        except DataSource.DoesNotExist:
-            return Response({"error": "Payroll data source not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-
-            processed_records = process_payroll_file(data_source.file_path.path)
-            
-            for record in processed_records:
-                record.data_source = data_source
-                record.save()
-
-            return Response(
-                {"message": f"Successfully processed {len(processed_records)} payroll records from data source {data_source_id}"},
-                status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            return Response({"error": f"Error processing payroll file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response({"message": "Payroll record deleted successfully"}, status=status.HTTP_200_OK)
-
-class AdjustmentViewSet(viewsets.ModelViewSet):
-    queryset = Adjustment.objects.all()
-    serializer_class = AdjustmentSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response({"message": "Adjustment deleted successfully"}, status=status.HTTP_200_OK)
-
-    @action(detail=False, methods=['post'])
-    def suggest(self, request):
-        quickbook_records = QuickbookRecord.objects.all()
-        payroll_records = PayrollRecord.objects.all()
-
-        suggestions = suggest_adjustments(quickbook_records, payroll_records)
-
-        saved_count = 0
-        for suggestion in suggestions:
-            suggestion.created_by = request.user
-            suggestion.save()
-            saved_count += 1
-
-        return Response(
-            {"message": f"Successfully suggested and saved {saved_count} adjustments."},
-            status=status.HTTP_200_OK
-        )
-
-    @action(detail=False, methods=['get'])
-    def pending_review(self, request):
-        pending = self.queryset.filter(status='PENDING')
-        serializer = self.get_serializer(pending, many=True)
+    def get(self, request):
+        data_sources = DataSource.objects.all()
+        serializer = DataSourceSerializer(data_sources, many=True)
         return Response(serializer.data)
 
-class RecastPLViewSet(viewsets.ModelViewSet):
-    queryset = RecastPL.objects.all()
-    serializer_class = RecastPLSerializer
+    def post(self, request):
+        serializer = DataSourceSerializer(data=request.data)
+        if serializer.is_valid():
+            data_source = serializer.save(user=request.user)
+            self.process_data_source(data_source)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def process_data_source(self, data_source):
+        data_source.processing_status = 'PROCESSING'
+        data_source.processing_started_at = timezone.now()
+        data_source.save()
+        try:
+            if data_source.source_type == 'QB':
+                process_quickbooks_file(data_source)
+            elif data_source.source_type == 'PAYROLL':
+                process_payroll_file(data_source)
+            elif data_source.source_type == 'PL':
+                process_profit_and_loss_file(data_source)
+            elif data_source.source_type == 'STOC':
+                process_stoc_file(data_source)
+            data_source.processing_status = 'COMPLETED'
+            data_source.processing_completed_at = timezone.now()
+        except Exception as e:
+            data_source.processing_status = 'FAILED'
+            data_source.error_message = str(e)
+        finally:
+            data_source.save()
+
+class DataSourceDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response({"message": "Recast P&L statement deleted successfully"}, status=status.HTTP_200_OK)
+    def get(self, request, pk):
+        data_source = get_object_or_404(DataSource, pk=pk)
+        serializer = DataSourceSerializer(data_source)
+        return Response(serializer.data)
 
-    @action(detail=False, methods=['post'])
-    def generate(self, request):
-        month = request.data.get('month')
-        year = request.data.get('year')
-        
-        if not month or not year:
+    def delete(self, request, pk):
+        data_source = get_object_or_404(DataSource, pk=pk)
+        data_source.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class DataSourceRecordsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        data_source = get_object_or_404(DataSource, pk=pk)
+        if data_source.source_type == 'QB':
+            records = data_source.quickbook_records.all()
+            serializer = QuickbookRecordSerializer(records, many=True)
+        elif data_source.source_type == 'PAYROLL':
+            records = data_source.payroll_records.all()
+            serializer = PayrollRecordSerializer(records, many=True)
+        elif data_source.source_type == 'PL':
+            records = data_source.profit_loss_records.all()
+            serializer = ProfitLossRecordSerializer(records, many=True)
+        else:
             return Response(
-                {"error": "Month and year are required in the request body"},
+                {"error": "Invalid source type for records"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+        return Response(serializer.data)
+
+class AdjustmentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        adjustments = Adjustment.objects.all()
+        serializer = AdjustmentSerializer(adjustments, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = AdjustmentSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(created_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def get_pending_review(self, request):
+        adjustments = Adjustment.objects.filter(status='PENDING_REVIEW')
+        serializer = AdjustmentSerializer(adjustments, many=True)
+        return Response(serializer.data)
+
+class AdjustmentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        adjustment = get_object_or_404(Adjustment, pk=pk)
+        serializer = AdjustmentSerializer(adjustment)
+        return Response(serializer.data)
+
+    def put(self, request, pk):
+        adjustment = get_object_or_404(Adjustment, pk=pk)
+        serializer = AdjustmentSerializer(adjustment, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, pk):
+        adjustment = get_object_or_404(Adjustment, pk=pk)
+        serializer = AdjustmentSerializer(adjustment, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        adjustment = get_object_or_404(Adjustment, pk=pk)
+        adjustment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class AdjustmentSuggestionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data_source_id = request.data.get('data_source_id')
+        if not data_source_id:
+            return Response({"error": "data_source_id is required"}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            target_date = date(int(year), int(month), 1) 
+            data_source = DataSource.objects.get(pk=data_source_id)
+        except DataSource.DoesNotExist:
+            return Response({"error": "Data source not found"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            suggested_adjustments = suggest_adjustments(data_source)
+            return Response({
+                "message": f"Successfully suggested {len(suggested_adjustments)} adjustments for data source {data_source_id}",
+                "suggested_adjustments_count": len(suggested_adjustments),
+                "data_source_id": data_source_id
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Error suggesting adjustments: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class RecastPLView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        recast_pls = RecastPL.objects.all()
+        serializer = RecastPLSerializer(recast_pls, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        data_source_id = request.data.get('data_source_id')
+        month = request.data.get('month')
+        year = request.data.get('year')
+        adjustment_ids = request.data.get('adjustment_ids', [])
+        if not all([data_source_id, month, year]):
+            return Response(
+                {"error": "data_source_id, month, and year are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            from datetime import date
+            target_date = date(int(year), int(month), 1)
         except ValueError:
             return Response(
                 {"error": "Invalid month or year provided"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        try:
+            recast_pl_instance = generate_recast_pl(data_source_id, adjustment_ids, target_date)
+            serializer = RecastPLSerializer(recast_pl_instance)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Error generating Recast P&L: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        quickbook_records = QuickbookRecord.objects.filter(
-            date__year=year,
-            date__month=month
-        )
-
-        approved_adjustments = Adjustment.objects.filter(
-            status='APPROVED',
-            date__year=year,
-            date__month=month
-        )
-
-        recast_pl_data = generate_recast_pl(quickbook_records, approved_adjustments, target_date)
-        
-        recast_pl_instance, created = RecastPL.objects.get_or_create(
-            date=target_date, 
-            defaults=recast_pl_data 
-        )
-        
-        if not created:
-            recast_pl_instance.revenue = recast_pl_data['revenue']
-            recast_pl_instance.cogs = recast_pl_data['cogs']
-            recast_pl_instance.gross_profit = recast_pl_data['gross_profit']
-            recast_pl_instance.operating_expenses = recast_pl_data['operating_expenses']
-            recast_pl_instance.ebitda = recast_pl_data['ebitda']
-            recast_pl_instance.save()
-            
-        recast_pl_instance.adjustments.clear()
-        recast_pl_instance.adjustments.set(approved_adjustments)
-
-        serializer = self.get_serializer(recast_pl_instance)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    @action(detail=False, methods=['get'])
-    def monthly_report(self, request):
+    def get_monthly_report(self, request):
         month = request.query_params.get('month')
         year = request.query_params.get('year')
-        
         if not month or not year:
             return Response(
                 {"error": "Month and year are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-        report = self.queryset.filter(
-            date__year=year,
-            date__month=month
+        report = RecastPL.objects.filter(
+            period_start__year=year,
+            period_start__month=month
         ).first()
-
         if not report:
             return Response(
-                {"error": "No report found for the specified month"},
+                {"error": "No report found for the specified period"},
                 status=status.HTTP_404_NOT_FOUND
             )
-
-        serializer = self.get_serializer(report)
+        serializer = RecastPLSerializer(report)
         return Response(serializer.data)
 
-class SupplementalNoteViewSet(viewsets.ModelViewSet):
-    queryset = SupplementalNote.objects.all()
-    serializer_class = SupplementalNoteSerializer
+class PDFDocumentView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response({"message": "Supplemental note deleted successfully"}, status=status.HTTP_200_OK)
+    def get(self, request):
+        documents = PDFDocument.objects.all()
+        serializer = PDFDocumentSerializer(documents, many=True)
+        return Response(serializer.data)
 
-class StocAccountingDataViewSet(viewsets.ModelViewSet):
-    queryset = StocAccountingData.objects.all()
-    serializer_class = StocAccountingDataSerializer
+    def post(self, request):
+        serializer = PDFDocumentSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ExportTemplateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def perform_create(self, serializer):
-        serializer.save(uploaded_by=self.request.user)
+    def get(self, request):
+        templates = ExportTemplate.objects.all()
+        serializer = ExportTemplateSerializer(templates, many=True)
+        return Response(serializer.data)
 
-    @action(detail=False, methods=['post'])
-    def process_data_source(self, request):
-        data_source_id = request.data.get('data_source_id')
-        if not data_source_id:
-            return Response({"error": "data_source_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            data_source = DataSource.objects.get(id=data_source_id, source_type='STOC')
-        except DataSource.DoesNotExist:
-            return Response({"error": "STOC data source not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            from .utils import process_stoc_file
-            processed_records_count = process_stoc_file(data_source.file_path.path, self.request.user)
-
-            return Response(
-                {"message": f"Successfully processed {processed_records_count} STOC accounting records from data source {data_source_id}"},
-                status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            return Response({"error": f"Error processing STOC file: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def post(self, request):
+        serializer = ExportTemplateSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login_view(request):
     username = request.data.get('username')
     password = request.data.get('password')
-    
-    if username is None or password is None:
-        return Response({'error': 'Please provide both username and password'},
-                      status=status.HTTP_400_BAD_REQUEST)
-    
+    if not username or not password:
+        return Response(
+            {"error": "Please provide both username and password"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     user = authenticate(username=username, password=password)
-    
-    if not user:
-        return Response({'error': 'Invalid credentials'},
-                      status=status.HTTP_401_UNAUTHORIZED)
-    
-    token, _ = Token.objects.get_or_create(user=user)
-    
-    return Response({
-        'access_token': token.key,
-        'token_type': 'Bearer',
-        'user_id': user.pk,
-        'username': user.username
-    })
+    if user:
+        login(request, user)
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({
+            "token": token.key,
+            "user_id": user.id,
+            "username": user.username
+        })
+    return Response(
+        {"error": "Invalid credentials"},
+        status=status.HTTP_401_UNAUTHORIZED
+    )
